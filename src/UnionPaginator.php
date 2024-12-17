@@ -429,7 +429,7 @@ class UnionPaginator
     {
         $className = $model::class;
 
-        if (DB::getDriverName() !== 'sqlite') {
+        if (!in_array(DB::getDriverName(), ['sqlite', 'pgsql'])) {
             $className = addslashes($className);
         }
 
