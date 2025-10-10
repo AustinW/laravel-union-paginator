@@ -199,7 +199,7 @@ class UnionPaginator
     protected function executePagination(int $perPage, array|string $columns, string $pageName, ?int $page): LengthAwarePaginator
     {
         $items = DB::table(DB::raw("({$this->unionQuery->toSql()}) as subquery"))
-            ->mergeBindings($this->unionQuery->getQuery())
+            ->mergeBindings($this->unionQuery->toBase())
             ->forPage($page, $perPage)
             ->get($columns);
 
