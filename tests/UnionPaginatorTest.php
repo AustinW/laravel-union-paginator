@@ -2,6 +2,8 @@
 
 namespace AustinW\UnionPaginator\Tests;
 
+use AustinW\UnionPaginator\Database\Factories\PostModelFactory;
+use AustinW\UnionPaginator\Database\Factories\UserModelFactory;
 use AustinW\UnionPaginator\Tests\TestClasses\Models\CommentModel;
 use AustinW\UnionPaginator\Tests\TestClasses\Models\PostModel;
 use AustinW\UnionPaginator\Tests\TestClasses\Models\UserModel;
@@ -9,7 +11,11 @@ use AustinW\UnionPaginator\UnionPaginator;
 use BadMethodCallException;
 use Illuminate\Contracts\Database\Query\Builder;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
+use Illuminate\Database\Eloquent\Attributes\ScopedBy;
+use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Eloquent\Factories\Sequence;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Scope;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
@@ -647,5 +653,50 @@ class UnionPaginatorTest extends TestCase
         // We expect that posts has already been loaded on the model
         $this->assertTrue($items[0]->relationLoaded('posts'));
         $this->assertCount(3, $items[0]->posts);
+    }
+
+    public function test_fetch_models_using_global_scopes()
+    {
+        // When the paginated models utilise global scopes, the paginator should correctly apply those scopes.
+
+        $comment = CommentModel::factory()
+            ->recycle(UserModel::factory()->create(['email' => 'foo@test.com']))
+            ->create();
+
+        $comment2 = CommentModel::factory()
+            ->recycle(UserModel::factory()->create(['email' => 'bar@test.com']))
+            ->create();
+
+        $paginator = UnionPaginator::forModels([PostModelWithGlobalScope::class, CommentModelWithGlobalScope::class]);
+
+        $items = $paginator->paginate()->items();
+
+        $this->assertCount(2, $items);
+
+        $this->assertEquals(CommentModelWithGlobalScope::class, get_class($items[0]));
+        $this->assertEquals($comment->id, $items[0]->id);
+
+        $this->assertEquals(PostModelWithGlobalScope::class, get_class($items[1]));
+        $this->assertEquals($comment->post_id, $items[1]->id);
+    }
+}
+
+#[ScopedBy(TestScope::class)]
+class PostModelWithGlobalScope extends PostModel
+{
+    public $table = 'post_models';
+}
+
+#[ScopedBy(TestScope::class)]
+class CommentModelWithGlobalScope extends CommentModel
+{
+    public $table = 'comment_models';
+}
+
+class TestScope implements Scope
+{
+    public function apply(EloquentBuilder $builder, Model $model): void
+    {
+        $builder->whereRelation('user', 'email', 'foo@test.com');
     }
 }

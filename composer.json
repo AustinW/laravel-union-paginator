@@ -24,19 +24,19 @@
     ],
     "require": {
         "php": "^8.2",
-        "illuminate/contracts": "^10.0|^11.0|^12.0",
-        "illuminate/database": "^10.0|^11.0|^12.0",
-        "illuminate/support": "^10.0|^11.0|^12.0",
-        "illuminate/pagination": "^10.0|^11.0|^12.0"
+        "illuminate/contracts": "^10.0|^11.0|^12.0|^13.0",
+        "illuminate/database": "^10.0|^11.0|^12.0|^13.0",
+        "illuminate/support": "^10.0|^11.0|^12.0|^13.0",
+        "illuminate/pagination": "^10.0|^11.0|^12.0|^13.0"
     },
     "require-dev": {
         "roave/security-advisories": "dev-latest",
         "ext-json": "*",
-        "larastan/larastan": "^2.9",
-        "mockery/mockery": "^1.4",
-        "orchestra/testbench": "^7.0|^8.0",
-        "pestphp/pest": "^2.0",
-        "phpunit/phpunit": "^10.0"
+        "larastan/larastan": "^3.0",
+        "mockery/mockery": "^1.6",
+        "orchestra/testbench": "^7.0|^8.0|^9.0|^10.0",
+        "pestphp/pest": "^2.0|^3.0",
+        "phpunit/phpunit": "^10.0|^11.0|^12.0"
     },
     "autoload": {
         "psr-4": {
