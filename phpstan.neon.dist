@@ -1,23 +1,11 @@
 includes:
     - ./vendor/larastan/larastan/extension.neon
-    - phpstan-baseline.neon
 
 parameters:
-
     paths:
         - src/
 
-    # Level 9 is the highest level
-    level: 5
+    level: 8
 
-    checkModelProperties: true
     checkOctaneCompatibility: true
-    reportUnmatchedIgnoredErrors: false
     noUnnecessaryCollectionCall: true
-    checkNullables: true
-    treatPhpDocTypesAsCertain: false
-
-    ignoreErrors:
-        - '#PHPDoc tag @var#'
-
-    excludePaths:
