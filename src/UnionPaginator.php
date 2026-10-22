@@ -198,7 +198,7 @@ class UnionPaginator
      */
     protected function executePagination(int $perPage, array|string $columns, string $pageName, ?int $page): LengthAwarePaginator
     {
-        $items = $this->unionQuery->getConnection()->query()
+        $items = $this->unionQuery->getQuery()->newQuery()
             ->fromSub($this->unionQuery, 'subquery')
             ->forPage($page, $perPage)
             ->get($columns);

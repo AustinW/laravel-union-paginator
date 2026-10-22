@@ -89,8 +89,8 @@ class UnionPaginatorTest extends TestCase
         UserModel::find(1)->delete();
         PostModel::find(2)->delete();
 
-        $this->assertSoftDeleted(UserModel::find(1));
-        $this->assertSoftDeleted(PostModel::find(2));
+        $this->assertSoftDeleted(UserModel::withTrashed()->find(1));
+        $this->assertSoftDeleted(PostModel::withTrashed()->find(2));
 
         $result = $paginator->paginate();
 
