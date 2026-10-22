@@ -233,6 +233,13 @@ class UnionPaginator
     {
         $query = $this->toBase();
 
+        // Laravel builds cursors from column orders only; raw, random and expression orders would skip or repeat rows.
+        foreach ($query->orders ?? [] as $order) {
+            if (! is_string($order['column'] ?? null)) {
+                throw new InvalidArgumentException('cursorPaginate() needs column orders. Raw, random and expression orders are not supported.');
+            }
+        }
+
         if (empty($query->orders)) {
             $this->addTieBreakers($query);
         }
@@ -371,7 +378,7 @@ class UnionPaginator
     {
         /** @var Collection<int, stdClass> $rows */
         $items = $this->preventModelRetrieval
-            ? $rows->map(fn (stdClass $row) => $this->applyTransformer($row->type, $row))
+            ? $rows->map(fn (stdClass $row) => $this->applyTransformer($row->type, clone $row))
             : $this->loadModels($rows);
 
         return $items->values();

@@ -28,7 +28,8 @@ final class UnionCursorPaginator extends CursorPaginator
     {
         // Built empty, so the constructor does not reverse the (already ordered) rows a second time.
         $instance = new self([], $paginator->perPage(), $paginator->cursor(), $paginator->getOptions());
-        $instance->hasMore = $paginator->hasMorePages();
+        // Not hasMorePages(): that is always true when paging backwards.
+        $instance->hasMore = $paginator->hasMore;
         $instance->rows = $paginator->getCollection();
         $instance->setCollection($items);
 

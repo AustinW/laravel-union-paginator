@@ -931,6 +931,59 @@ class UnionPaginatorTest extends TestCase
         $this->assertInstanceOf(CommentModel::class, $models[0]);
         $this->assertTrue($models[1]->is($post));
     }
+
+    public function test_cursor_back_to_the_first_page_has_no_previous_page()
+    {
+        UserModel::factory()->count(6)->create();
+
+        $paginator = UnionPaginator::forModels([UserModel::class])->orderBy('id');
+
+        $first = $paginator->cursorPaginate(2);
+        $second = $paginator->cursorPaginate(2, ['*'], 'cursor', $first->nextCursor());
+        $back = $paginator->cursorPaginate(2, ['*'], 'cursor', $second->previousCursor());
+
+        $this->assertEquals([1, 2], array_map(fn ($user) => $user->id, $back->items()));
+        $this->assertTrue($back->onFirstPage());
+        $this->assertNull($back->previousCursor());
+        $this->assertNotNull($back->nextCursor());
+    }
+
+    public function test_cursor_rejects_raw_random_and_expression_orders()
+    {
+        $paginators = [
+            UnionPaginator::forModels([UserModel::class])->orderByRaw('id desc'),
+            UnionPaginator::forModels([UserModel::class])->inRandomOrder(),
+            UnionPaginator::forModels([UserModel::class])->orderBy(DB::raw('id'), 'desc'),
+        ];
+
+        foreach ($paginators as $paginator) {
+            try {
+                $paginator->cursorPaginate();
+                $this->fail('Expected InvalidArgumentException.');
+            } catch (InvalidArgumentException) {
+                $this->addToAssertionCount(1);
+            }
+        }
+    }
+
+    public function test_raw_row_transformers_cannot_change_the_cursor()
+    {
+        UserModel::factory()->count(4)->create();
+
+        $paginator = UnionPaginator::forModels([UserModel::class])
+            ->preventModelRetrieval()
+            ->transformResultsFor(UserModel::class, function ($row) {
+                $row->id += 100;
+
+                return $row;
+            })
+            ->orderBy('id');
+
+        $first = $paginator->cursorPaginate(2);
+        $second = $paginator->cursorPaginate(2, ['*'], 'cursor', $first->nextCursor());
+
+        $this->assertEquals([103, 104], array_map(fn ($row) => $row->id, $second->items()));
+    }
 }
 
 class OtherTagModel extends TagModel

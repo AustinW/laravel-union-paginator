@@ -76,7 +76,7 @@ $paginator->simplePaginate(15);    // next/previous only, skips the COUNT over t
 $paginator->cursorPaginate(15);    // cursor pagination for large or infinite feeds
 ```
 
-Cursor pagination needs an order on non-null columns. `type` and `id` are appended automatically, so `->latest()->cursorPaginate()` works as long as `created_at` is never null.
+Cursor pagination needs column orders on non-null columns. `type` and `id` are appended automatically, so `->latest()->cursorPaginate()` works as long as `created_at` is never null. Raw (`orderByRaw`), random and expression orders throw, because Laravel cannot build a cursor from them.
 
 ## Loading models
 
