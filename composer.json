@@ -24,42 +24,36 @@
     ],
     "require": {
         "php": "^8.2",
-        "illuminate/contracts": "^10.0|^11.0|^12.0",
-        "illuminate/database": "^10.0|^11.0|^12.0",
-        "illuminate/support": "^10.0|^11.0|^12.0",
-        "illuminate/pagination": "^10.0|^11.0|^12.0"
+        "illuminate/contracts": "^10.0|^11.0|^12.0|^13.0",
+        "illuminate/database": "^10.0|^11.0|^12.0|^13.0",
+        "illuminate/support": "^10.0|^11.0|^12.0|^13.0",
+        "illuminate/pagination": "^10.0|^11.0|^12.0|^13.0"
     },
     "require-dev": {
-        "roave/security-advisories": "dev-latest",
         "ext-json": "*",
-        "larastan/larastan": "^2.9",
-        "mockery/mockery": "^1.4",
-        "orchestra/testbench": "^7.0|^8.0",
-        "pestphp/pest": "^2.0",
-        "phpunit/phpunit": "^10.0"
+        "larastan/larastan": "^2.9|^3.0",
+        "orchestra/testbench": "^8.0|^9.0|^10.0|^11.0",
+        "phpunit/phpunit": "^10.5|^11.0|^12.0"
     },
     "autoload": {
         "psr-4": {
-            "AustinW\\UnionPaginator\\": "src",
-            "AustinW\\UnionPaginator\\Database\\Factories\\": "database/factories"
+            "AustinW\\UnionPaginator\\": "src"
         }
     },
     "autoload-dev": {
         "psr-4": {
-            "AustinW\\UnionPaginator\\Tests\\": "tests"
+            "AustinW\\UnionPaginator\\Tests\\": "tests",
+            "AustinW\\UnionPaginator\\Database\\Factories\\": "database/factories"
         }
     },
     "scripts": {
-        "test": "vendor/bin/pest",
-        "test-coverage": "phpunit --coverage-html coverage",
+        "test": "vendor/bin/phpunit",
+        "test-coverage": "vendor/bin/phpunit --coverage-html coverage",
         "analyse": "vendor/bin/phpstan analyse --ansi --memory-limit=4G",
         "baseline": "vendor/bin/phpstan analyse --generate-baseline --memory-limit=4G"
     },
     "config": {
-        "sort-packages": true,
-        "allow-plugins": {
-            "pestphp/pest-plugin": true
-        }
+        "sort-packages": true
     },
     "extra": {
         "laravel": {

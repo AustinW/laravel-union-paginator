@@ -9,7 +9,6 @@ use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Traits\ForwardsCalls;
 use Illuminate\Pagination\LengthAwarePaginator;
 use InvalidArgumentException;
@@ -25,11 +24,6 @@ class UnionPaginator
      * @var array List of model types to be paginated.
      */
     protected array $modelTypes = [];
-
-    /**
-     * @var Builder The base query builder instance.
-     */
-    public Builder $query;
 
     /**
      * @var EloquentBuilder|null The union query builder instance.
@@ -198,8 +192,8 @@ class UnionPaginator
      */
     protected function executePagination(int $perPage, array|string $columns, string $pageName, ?int $page): LengthAwarePaginator
     {
-        $items = DB::table(DB::raw("({$this->unionQuery->toSql()}) as subquery"))
-            ->mergeBindings($this->unionQuery->getQuery())
+        $items = $this->unionQuery->getQuery()->newQuery()
+            ->fromSub($this->unionQuery, 'subquery')
             ->forPage($page, $perPage)
             ->get($columns);
 
@@ -433,7 +427,8 @@ class UnionPaginator
     {
         $className = $model::class;
 
-        if (!in_array(DB::getDriverName(), ['sqlite', 'pgsql'])) {
+        // Only MySQL/MariaDB treat backslashes in string literals as escapes.
+        if (in_array($model->getConnection()->getDriverName(), ['mysql', 'mariadb'])) {
             $className = addslashes($className);
         }
 
