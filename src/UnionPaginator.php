@@ -9,7 +9,6 @@ use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Traits\ForwardsCalls;
 use Illuminate\Pagination\LengthAwarePaginator;
 use InvalidArgumentException;
@@ -25,11 +24,6 @@ class UnionPaginator
      * @var array List of model types to be paginated.
      */
     protected array $modelTypes = [];
-
-    /**
-     * @var Builder The base query builder instance.
-     */
-    public Builder $query;
 
     /**
      * @var EloquentBuilder|null The union query builder instance.
