@@ -26,6 +26,8 @@ Install via Composer:
 composer require austinw/laravel-union-paginator
 ```
 
+Requires PHP 8.2+ and Laravel 10, 11, 12 or 13.
+
 ## Migration Guide
 
 If you are upgrading from an earlier version of `UnionPaginator`, please refer to the [Migration Guide](MIGRATION.md) for detailed instructions on updating your code to take advantage of the latest features and improvements.
@@ -62,13 +64,13 @@ You can apply specific query conditions to a single model type before creating t
 $paginator->applyScope(User::class, fn($query) => $query->where('active', true));
 ```
 
+Now only active users are included in the final union.
+
 ### Customizing Mass Model Retrieval
 The UnionPaginator class allows you to customize how models are retrieved during pagination. This can be useful if you need to apply specific logic or optimizations when fetching models from the database.
 
 #### Registering a Custom Retrieval Callback
 You can register a custom callback for retrieving models by type using the fetchModelsUsing method. This method allows you to define how models should be fetched for a specific model type.
-
-Now only active users are included in the final union.
 
 ```php
 use AustinW\UnionPaginator\UnionPaginator;
@@ -129,8 +131,10 @@ Transformations still apply, but are run on raw records.
 Choose specific columns for each model type to reduce overhead:
 
 ```php
-$paginator->setSelectedColumns(User::class, ['id', 'email', DB::raw("'User' as type")]);
+$paginator->setSelectedColumns(User::class, ['id', 'created_at', 'updated_at', DB::raw(DB::getPdo()->quote(User::class).' as type')]);
 ```
+
+Every model must select the same number of columns (a SQL `UNION` requirement), and `type` must hold the model's class name unless you call `preventModelRetrieval()`.
 
 ### Soft Deletes
 
