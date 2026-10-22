@@ -198,8 +198,8 @@ class UnionPaginator
      */
     protected function executePagination(int $perPage, array|string $columns, string $pageName, ?int $page): LengthAwarePaginator
     {
-        $items = DB::table(DB::raw("({$this->unionQuery->toSql()}) as subquery"))
-            ->mergeBindings($this->unionQuery->toBase())
+        $items = $this->unionQuery->getConnection()->query()
+            ->fromSub($this->unionQuery, 'subquery')
             ->forPage($page, $perPage)
             ->get($columns);
 
@@ -431,17 +431,11 @@ class UnionPaginator
      */
     protected function defaultColumns(Model $model): array
     {
-        $className = $model::class;
-
-        if (!in_array(DB::getDriverName(), ['sqlite', 'pgsql'])) {
-            $className = addslashes($className);
-        }
-
         return [
             $model->getKeyName(),
             'created_at',
             'updated_at',
-            DB::raw(sprintf("'%s' as type", $className))
+            DB::raw($model->getConnection()->getPdo()->quote($model::class) . ' as type')
         ];
     }
 

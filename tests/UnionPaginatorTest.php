@@ -679,6 +679,40 @@ class UnionPaginatorTest extends TestCase
         $this->assertEquals(PostModelWithGlobalScope::class, get_class($items[1]));
         $this->assertEquals($comment->post_id, $items[1]->id);
     }
+
+    public function test_paginates_on_the_models_connection_not_the_default_one()
+    {
+        // Note: Each post will create a user record
+        PostModel::factory()->count(2)->create();
+
+        // Point the "pinned" connection at the seeded database, then make the default an empty one.
+        config(['database.connections.pinned' => config('database.connections.'.config('database.default'))]);
+        config(['database.connections.empty' => ['driver' => 'sqlite', 'database' => ':memory:']]);
+        DB::connection('pinned')->setPdo(DB::connection()->getPdo());
+        $default = config('database.default');
+        config(['database.default' => 'empty']);
+
+        $result = UnionPaginator::forModels([PinnedUserModel::class, PinnedPostModel::class])->paginate();
+
+        config(['database.default' => $default]);
+
+        $this->assertEquals(4, $result->total());
+        $this->assertCount(4, $result->items());
+    }
+}
+
+class PinnedUserModel extends UserModel
+{
+    protected $connection = 'pinned';
+
+    public $table = 'user_models';
+}
+
+class PinnedPostModel extends PostModel
+{
+    protected $connection = 'pinned';
+
+    public $table = 'post_models';
 }
 
 #[ScopedBy(TestScope::class)]
