@@ -1,5 +1,50 @@
 # Migration Guide
 
+## 2.x to 3.0
+
+### Requirements
+- Laravel 12 or 13 (10 and 11 are no longer supported).
+
+### Forwarded query calls apply to the whole union
+In 2.x, calls such as `where()` or `orderBy()` on the paginator went to the **first** model's query, and built the union early, so a later `applyScope()` or `setSelectedColumns()` was silently ignored.
+
+In 3.0 they run on a derived table over the union (`select * from (… union …) as union_paginator`), after all configuration, in any call order.
+
+- **`where()` now filters every model.** If you relied on it filtering only the first model, move it into `applyScope()`.
+- **Only query builder `where*`, `orderBy*`, `latest`, `oldest`, `reorder` and `inRandomOrder` are forwarded.** Anything else throws `BadMethodCallException`. Eloquent-only methods (`whereHas()`, local scopes, `whereKey()`) belong in `applyScope()`:
+  ```php
+  // 2.x
+  $paginator->whereHas('author');
+  // 3.0
+  $paginator->applyScope(Post::class, fn ($query) => $query->whereHas('author'));
+  ```
+- **Only union columns are visible** (`id`, `created_at`, `updated_at`, `type` and your selected columns). With a single model, 2.x could order by an unselected column; in 3.0, select it with `setSelectedColumns()` first.
+- `where(fn ($query) => …)` closures receive `Illuminate\Database\Query\Builder`, not an Eloquent builder.
+- When you order, `type` and `id` are appended as tie-breakers.
+
+### Columns
+- The key is selected as `id` (`posts.uuid as id`), so models whose key is not `id` now load correctly. Raw rows from `preventModelRetrieval()` have `id` instead of the key name.
+- Timestamps use the model's `CREATED_AT`/`UPDATED_AT` columns, aliased `created_at`/`updated_at`. Set them to `null` for tables without timestamps.
+- **`setSelectedColumns()` must not include `type`** — the paginator adds it as the last column. Alias the key as `id`, and keep the same column order for every model.
+
+### Results
+- Rows whose model is not returned by `findMany()` / `fetchModelsUsing()` are skipped instead of yielding `null`.
+- With no `orderBy`, row order is up to the database. 2.x on SQLite happened to sort rows; add an explicit order if you depended on it.
+
+### Validation
+`applyScope()`, `setSelectedColumns()` and `transformResultsFor()` throw `InvalidArgumentException` for a model type that is not registered (2.x ignored it for `transformResultsFor()`). `setModelTypes()` validates classes. Duplicate model types are ignored. Models on different database connections throw.
+
+### Removed
+- `UnionPaginatorServiceProvider` (it was empty). If you registered it manually, remove it from `bootstrap/providers.php` / `config/app.php`.
+- Public `$unionQuery`, `$scopes`, `$transformers` properties, and `prepareUnionQuery()`, `hasScope()`, `getScopesFor()`. Use `toBase()` to get the query (for `toSql()` and debugging).
+- The constructor is `final`.
+
+### New
+- `simplePaginate()` (no COUNT query) and `cursorPaginate()`.
+- `toBase()` returns the query builder over the union.
+- `when()` / `unless()`.
+
+
 ## Version 2.1.1 to 2.2.0
 
 To migrate from version 2.1.1 to 2.2.1 of the `UnionPaginator`, you need to make a small adjustment due to a method name change. Here's a concise guide:
