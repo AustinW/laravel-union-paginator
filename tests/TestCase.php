@@ -10,7 +10,6 @@ use Illuminate\Foundation\Testing\DatabaseMigrations;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Orchestra\Testbench\TestCase as Orchestra;
-use AustinW\UnionPaginator\UnionPaginatorServiceProvider;
 
 class TestCase extends Orchestra
 {
@@ -49,6 +48,11 @@ class TestCase extends Orchestra
             $table->timestamps();
         });
 
+        $app['db']->connection()->getSchemaBuilder()->create('tag_models', function (Blueprint $table) {
+            $table->increments('tag_id');
+            $table->string('name');
+        });
+
         $app['db']->connection()->getSchemaBuilder()->create('comment_models', function (Blueprint $table) {
             $table->increments('id');
             $table->integer('user_id');
@@ -57,13 +61,6 @@ class TestCase extends Orchestra
 
             $table->timestamps();
         });
-    }
-
-    protected function getPackageProviders($app)
-    {
-        return [
-            UnionPaginatorServiceProvider::class,
-        ];
     }
 
     protected function assertQueryLogContains(string $partialSql)
@@ -78,6 +75,11 @@ class TestCase extends Orchestra
         $queryLog = collect(DB::getQueryLog())->pluck('query')->implode('|');
 
         $this->assertFalse(Str::contains($queryLog, $partialSql), "Query log contained partial SQL: `{$partialSql}`");
+    }
+
+    protected function normalizeSql(string $sql): string
+    {
+        return strtolower(str_replace(['"', '`', '(', ')'], '', $sql));
     }
 
     public function sortCallback(Builder $query, $descending): void
