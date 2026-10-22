@@ -1,9 +1,8 @@
 vendor
-.php_cs.cache
 coverage
 .phpunit.cache
 .phpunit.result.cache
 /.idea
-.php-cs-fixer.cache
 .codiumai
 .DS_Store
+composer.lock
