@@ -24,16 +24,16 @@
     ],
     "require": {
         "php": "^8.2",
-        "illuminate/contracts": "^10.0|^11.0|^12.0|^13.0",
-        "illuminate/database": "^10.0|^11.0|^12.0|^13.0",
-        "illuminate/support": "^10.0|^11.0|^12.0|^13.0",
-        "illuminate/pagination": "^10.0|^11.0|^12.0|^13.0"
+        "illuminate/contracts": "^12.0|^13.0",
+        "illuminate/database": "^12.0|^13.0",
+        "illuminate/support": "^12.0|^13.0",
+        "illuminate/pagination": "^12.0|^13.0"
     },
     "require-dev": {
         "ext-json": "*",
-        "larastan/larastan": "^2.9|^3.0",
-        "orchestra/testbench": "^8.0|^9.0|^10.0|^11.0",
-        "phpunit/phpunit": "^10.5|^11.0|^12.0"
+        "larastan/larastan": "^3.0",
+        "orchestra/testbench": "^10.0|^11.0",
+        "phpunit/phpunit": "^11.0|^12.0"
     },
     "autoload": {
         "psr-4": {
@@ -49,18 +49,10 @@
     "scripts": {
         "test": "vendor/bin/phpunit",
         "test-coverage": "vendor/bin/phpunit --coverage-html coverage",
-        "analyse": "vendor/bin/phpstan analyse --ansi --memory-limit=4G",
-        "baseline": "vendor/bin/phpstan analyse --generate-baseline --memory-limit=4G"
+        "analyse": "vendor/bin/phpstan analyse --ansi --memory-limit=4G"
     },
     "config": {
         "sort-packages": true
-    },
-    "extra": {
-        "laravel": {
-            "providers": [
-                "AustinW\\UnionPaginator\\UnionPaginatorServiceProvider"
-            ]
-        }
     },
     "minimum-stability": "dev",
     "prefer-stable": true

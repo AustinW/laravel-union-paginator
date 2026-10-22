@@ -6,6 +6,7 @@ use AustinW\UnionPaginator\Database\Factories\PostModelFactory;
 use AustinW\UnionPaginator\Database\Factories\UserModelFactory;
 use AustinW\UnionPaginator\Tests\TestClasses\Models\CommentModel;
 use AustinW\UnionPaginator\Tests\TestClasses\Models\PostModel;
+use AustinW\UnionPaginator\Tests\TestClasses\Models\TagModel;
 use AustinW\UnionPaginator\Tests\TestClasses\Models\UserModel;
 use AustinW\UnionPaginator\UnionPaginator;
 use BadMethodCallException;
@@ -27,17 +28,18 @@ class UnionPaginatorTest extends TestCase
 
     protected UserModel $comment;
 
-    // Constructor creates union query from multiple model types with correct table and type selection
-    public function test_union_query_is_created_after_paginate(): void
+    public function test_to_base_selects_from_a_union_of_the_models(): void
     {
-        $paginator = UnionPaginator::forModels([UserModel::class, PostModel::class]);
-        $paginator->paginate();
+        $query = UnionPaginator::forModels([UserModel::class, PostModel::class])->toBase();
 
-        $this->assertEquals(
-            'select * from (select "id", "created_at", "updated_at", \''.UserModel::class.'\' as type from "user_models" where "user_models"."deleted_at" is null) union select * from (select "id", "created_at", "updated_at", \''.PostModel::class.'\' as type from "post_models" where "post_models"."deleted_at" is null)',
-            $paginator->unionQuery->toSql()
-        );
-        $this->assertInstanceOf(Builder::class, $paginator->unionQuery);
+        $this->assertInstanceOf(Builder::class, $query);
+
+        $sql = $this->normalizeSql($query->toSql());
+
+        $this->assertStringContainsString(' union ', $sql);
+        $this->assertStringContainsString('as union_paginator', $sql);
+        $this->assertStringContainsString('from user_models where user_models.deleted_at is null', $sql);
+        $this->assertStringContainsString('from post_models where post_models.deleted_at is null', $sql);
     }
 
     // Constructor handles empty model types array
@@ -45,9 +47,7 @@ class UnionPaginatorTest extends TestCase
     {
         $paginator = new UnionPaginator();
 
-        $this->assertNull($paginator->unionQuery);
         $this->assertEmpty($paginator->getModelTypes());
-        $this->assertEmpty($paginator->transformers);
     }
 
     public function test_paginate_returns_a_length_aware_paginator(): void
@@ -69,7 +69,7 @@ class UnionPaginatorTest extends TestCase
         // Note: Each post will create a user record
         PostModel::factory()->count(3)->create();
 
-        $result = $paginator->transformResultsFor(UserModel::class, fn($record) => ['foo' => 'test'])->paginate();
+        $result = $paginator->transformResultsFor(UserModel::class, fn($record) => ['foo' => 'test'])->orderBy('id')->orderBy('type')->paginate();
 
         $this->assertEquals(PostModel::find(1), $result->items()[0]);
         $this->assertEquals(['foo' => 'test'], $result->items()[1]);
@@ -113,17 +113,11 @@ class UnionPaginatorTest extends TestCase
         $this->assertEquals(0, $result->total());
     }
 
-    public function test_transform_handles_non_existent_model_type(): void
+    public function test_transform_rejects_unregistered_model_type(): void
     {
-        $paginator = new UnionPaginator([UserModel::class, PostModel::class]);
+        $this->expectException(InvalidArgumentException::class);
 
-        $result = $paginator->transformResultsFor('foo', fn($record) => ['foo' => 'test'])->paginate();
-
-        $this->assertEquals([], $result->items());
-
-        $this->assertEmpty($paginator->transformers);
-
-        $this->assertEquals([UserModel::class, PostModel::class], $paginator->getModelTypes());
+        (new UnionPaginator([UserModel::class, PostModel::class]))->transformResultsFor('foo', fn($record) => ['foo' => 'test']);
     }
 
     public function test_method_forwarding_fails_for_null_union_query()
@@ -142,30 +136,20 @@ class UnionPaginatorTest extends TestCase
         new UnionPaginator(['foo', 'bar']);
     }
 
-    public function test_constructor_properly_escapes_model_type_names_in_raw_sql()
+    public function test_type_column_holds_the_exact_class_name()
     {
-        $paginator = new UnionPaginator([UserModel::class, PostModel::class]);
-        $paginator->paginate();
+        PostModel::factory()->create();
 
-        $this->assertStringContainsString(
-            '\''.UserModel::class.'\'',
-            $paginator->unionQuery->toSql()
-        );
+        $types = UnionPaginator::forModels([UserModel::class, PostModel::class])
+            ->preventModelRetrieval()
+            ->paginate()
+            ->getCollection()
+            ->pluck('type')
+            ->sort()
+            ->values()
+            ->all();
 
-        $this->assertStringContainsString(
-            '\''.PostModel::class.'\'',
-            $paginator->unionQuery->toSql()
-        );
-
-        $this->assertStringNotContainsString(
-            ' '.UserModel::class.' ',
-            $paginator->unionQuery->toSql()
-        );
-
-        $this->assertStringNotContainsString(
-            ' '.PostModel::class.' ',
-            $paginator->unionQuery->toSql()
-        );
+        $this->assertSame([PostModel::class, UserModel::class], $types);
     }
 
     public function test_paginate_respects_custom_per_page_value()
@@ -205,7 +189,6 @@ class UnionPaginatorTest extends TestCase
 
         $this->assertEquals(6, $result->total());
 
-        $this->assertNotEmpty($paginator->transformers);
         $this->assertEquals([UserModel::class, PostModel::class], $paginator->getModelTypes());
     }
 
@@ -216,7 +199,7 @@ class UnionPaginatorTest extends TestCase
         UserModel::factory()->count(2)->create();
         PostModel::factory()->count(2)->create();
 
-        $result = $paginator->paginate();
+        $result = $paginator->orderBy('id')->orderBy('type')->paginate();
 
         $this->assertEquals(6, $result->total());
         $this->assertEquals(
@@ -267,7 +250,7 @@ class UnionPaginatorTest extends TestCase
 
         PostModel::factory()->count(3)->create();
 
-        $result = $paginator->transformResultsFor(UserModel::class, fn($record) => null)->paginate();
+        $result = $paginator->transformResultsFor(UserModel::class, fn($record) => null)->orderBy('id')->orderBy('type')->paginate();
 
         $items = $result->items();
 
@@ -307,14 +290,22 @@ class UnionPaginatorTest extends TestCase
         $this->assertEquals(200, $result->total());
     }
 
-    public function test_transform_with_invalid_model_type(): void
+    public function test_scope_columns_and_fetch_reject_unregistered_model_types(): void
     {
         $paginator = new UnionPaginator([UserModel::class]);
 
-        $result = $paginator->transformResultsFor(PostModel::class, fn($record) => ['invalid' => true])->paginate();
-
-        $this->assertEmpty($paginator->transformers);
-        $this->assertCount(0, $result->items());
+        foreach ([
+            fn () => $paginator->applyScope(PostModel::class, fn ($query) => $query),
+            fn () => $paginator->setSelectedColumns(PostModel::class, ['id']),
+            fn () => $paginator->fetchModelsUsing(PostModel::class, fn (array $ids) => collect()),
+        ] as $call) {
+            try {
+                $call();
+                $this->fail('Expected InvalidArgumentException.');
+            } catch (InvalidArgumentException) {
+                $this->addToAssertionCount(1);
+            }
+        }
     }
 
     public function test_boundary_conditions_for_pagination(): void
@@ -400,6 +391,8 @@ class UnionPaginatorTest extends TestCase
             ->create(['created_at' => now()->subMinutes(5)]);
 
         $items = $paginator->applyScope(UserModel::class, fn($query) => $query->where('name', 'like', '%Sarah%'))
+            ->orderBy('id')
+            ->orderBy('type')
             ->paginate()
             ->items();
 
@@ -433,6 +426,8 @@ class UnionPaginatorTest extends TestCase
         $items = $paginator
             ->applyScope(UserModel::class, fn($query) => $query->where('name', 'like', '%Sarah%'))
             ->applyScope(PostModel::class, fn($query) => $query->where('created_at', '<', now()->subMinutes(4)))
+            ->orderBy('id')
+            ->orderBy('type')
             ->paginate()
             ->items();
 
@@ -459,7 +454,7 @@ class UnionPaginatorTest extends TestCase
         $paginator->transformResultsFor(UserModel::class, fn($model) => $model);
         $paginator->transformResultsFor(PostModel::class, fn($model) => $model);
 
-        $result = $paginator->paginate(10);
+        $result = $paginator->orderBy('id')->orderBy('type')->paginate(10);
 
         // Retrieve the logged queries.
         $queries = DB::getQueryLog();
@@ -471,11 +466,11 @@ class UnionPaginatorTest extends TestCase
 
         foreach ($queries as $query) {
             // Check which tables are being queried by looking at the SQL.
-            $sql = $query['query'] ?? $query['sql']; // depending on the Laravel version
-            if (strpos($sql, 'from "user_models" where "user_models"."id" in') !== false) {
+            $sql = $this->normalizeSql($query['query']);
+            if (str_contains($sql, 'from user_models where user_models.id in')) {
                 $userModelQueries++;
             }
-            if (strpos($sql, 'from "post_models" where "post_models"."id" in') !== false) {
+            if (str_contains($sql, 'from post_models where post_models.id in')) {
                 $postModelQueries++;
             }
         }
@@ -622,8 +617,8 @@ class UnionPaginatorTest extends TestCase
         // 'select * from "post_models" where "id" in (...)' after the initial union query.
         // We only expect the union pagination queries, not additional findMany() calls.
         foreach ($sqlStatements as $sql) {
-            $this->assertStringNotContainsString('from "user_models" where "user_models"."id" in', $sql);
-            $this->assertStringNotContainsString('from "post_models" where "post_models"."id" in', $sql);
+            $this->assertStringNotContainsString('from user_models where user_models.id in', $this->normalizeSql($sql));
+            $this->assertStringNotContainsString('from post_models where post_models.id in', $this->normalizeSql($sql));
         }
     }
 
@@ -669,7 +664,7 @@ class UnionPaginatorTest extends TestCase
 
         $paginator = UnionPaginator::forModels([PostModelWithGlobalScope::class, CommentModelWithGlobalScope::class]);
 
-        $items = $paginator->paginate()->items();
+        $items = $paginator->orderBy('id')->orderBy('type')->paginate()->items();
 
         $this->assertCount(2, $items);
 
@@ -699,6 +694,301 @@ class UnionPaginatorTest extends TestCase
         $this->assertEquals(4, $result->total());
         $this->assertCount(4, $result->items());
     }
+
+    public function test_forwarded_where_applies_to_every_model()
+    {
+        UserModel::factory()->create(['created_at' => now()->subDays(2)]);
+        PostModel::factory()->create(['created_at' => now()->subDays(2)]); // also creates a recent user
+        PostModel::factory()->create();
+
+        $items = UnionPaginator::forModels([UserModel::class, PostModel::class])
+            ->where('created_at', '<', now()->subDay())
+            ->paginate()
+            ->items();
+
+        $this->assertCount(2, $items);
+        $this->assertEqualsCanonicalizing(
+            [UserModel::class, PostModel::class],
+            array_map('get_class', $items)
+        );
+    }
+
+    public function test_configuration_after_a_forwarded_call_still_applies()
+    {
+        PostModel::factory()->count(2)->create();
+
+        $result = UnionPaginator::forModels([UserModel::class, PostModel::class])
+            ->latest()
+            ->applyScope(UserModel::class, fn ($query) => $query->whereRaw('1 = 0'))
+            ->paginate();
+
+        $this->assertEquals(2, $result->total());
+        $this->assertContainsOnlyInstancesOf(PostModel::class, $result->items());
+    }
+
+    public function test_unsupported_forwarded_method_throws()
+    {
+        $this->expectException(BadMethodCallException::class);
+
+        UnionPaginator::forModels([UserModel::class])->groupBy('type');
+    }
+
+    public function test_when_receives_the_paginator()
+    {
+        PostModel::factory()->create();
+
+        $result = UnionPaginator::forModels([UserModel::class, PostModel::class])
+            ->when(true, fn (UnionPaginator $paginator) => $paginator->applyScope(UserModel::class, fn ($query) => $query->whereRaw('1 = 0')))
+            ->paginate();
+
+        $this->assertContainsOnlyInstancesOf(PostModel::class, $result->items());
+    }
+
+    public function test_simple_paginate_hydrates_models_without_counting()
+    {
+        PostModel::factory()->count(3)->create();
+
+        DB::enableQueryLog();
+
+        $result = UnionPaginator::forModels([UserModel::class, PostModel::class])->simplePaginate(4);
+
+        $this->assertCount(4, $result->items());
+        $this->assertTrue($result->hasMorePages());
+        foreach ($result->items() as $item) {
+            $this->assertTrue($item instanceof UserModel || $item instanceof PostModel);
+        }
+        $this->assertQueryLogDoesntContain('count(*)');
+    }
+
+    public function test_cursor_paginate_walks_every_row_once()
+    {
+        $users = UserModel::factory()->count(3)->create(['created_at' => now()->subHour()]);
+        PostModel::factory()->count(3)->for($users[0], 'user')->create(['created_at' => now()->subHour()]);
+
+        $paginator = UnionPaginator::forModels([UserModel::class, PostModel::class])
+            ->latest()
+            ->orderBy('type')
+            ->orderBy('id');
+
+        $seen = [];
+        $cursor = null;
+
+        do {
+            $page = $paginator->cursorPaginate(4, ['*'], 'cursor', $cursor);
+
+            foreach ($page->items() as $item) {
+                $seen[] = $item::class.':'.$item->id;
+            }
+
+            $cursor = $page->nextCursor();
+        } while ($cursor);
+
+        $this->assertCount(6, $seen);
+        $this->assertCount(6, array_unique($seen));
+    }
+
+    public function test_models_with_custom_keys_and_no_timestamps()
+    {
+        $tag = TagModel::create(['name' => 'laravel']);
+        $user = UserModel::factory()->create();
+
+        $items = UnionPaginator::forModels([TagModel::class, UserModel::class])
+            ->orderBy('type')
+            ->paginate()
+            ->items();
+
+        $this->assertCount(2, $items);
+        $this->assertTrue($items[0]->is($tag));
+        $this->assertTrue($items[1]->is($user));
+    }
+
+    public function test_rows_without_a_loaded_model_are_skipped()
+    {
+        UserModel::factory()->count(3)->create();
+
+        $items = UnionPaginator::forModels([UserModel::class])
+            ->fetchModelsUsing(UserModel::class, fn (array $ids) => UserModel::findMany($ids)->where('id', '!=', 2))
+            ->orderBy('id')
+            ->paginate()
+            ->items();
+
+        $this->assertEquals([1, 3], array_map(fn ($user) => $user->id, $items));
+    }
+
+    public function test_duplicate_model_types_are_ignored()
+    {
+        $paginator = new UnionPaginator([UserModel::class, UserModel::class]);
+        $paginator->addModelType(UserModel::class);
+
+        $this->assertEquals([UserModel::class], $paginator->getModelTypes());
+    }
+
+    public function test_set_model_types_validates_classes()
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        (new UnionPaginator())->setModelTypes([UserModel::class, 'stdClass']);
+    }
+
+    public function test_eloquent_only_where_methods_are_rejected()
+    {
+        $this->expectException(BadMethodCallException::class);
+
+        UnionPaginator::forModels([UserModel::class])->whereHas('posts');
+    }
+
+    public function test_models_on_different_connections_are_rejected()
+    {
+        config(['database.connections.pinned' => config('database.connections.'.config('database.default'))]);
+
+        $this->expectException(InvalidArgumentException::class);
+
+        UnionPaginator::forModels([UserModel::class, PinnedPostModel::class])->toBase();
+    }
+
+    public function test_scoped_joins_do_not_duplicate_rows()
+    {
+        $user = UserModel::factory()->create();
+        PostModel::factory()->count(2)->for($user, 'user')->create();
+
+        $result = UnionPaginator::forModels([UserModel::class, CommentModel::class])
+            ->applyScope(UserModel::class, fn ($query) => $query->join('post_models', 'post_models.user_id', '=', 'user_models.id'))
+            ->paginate();
+
+        $this->assertEquals(1, $result->total());
+        $this->assertCount(1, $result->items());
+    }
+
+    public function test_several_models_without_timestamps_union_with_timestamped_ones()
+    {
+        TagModel::create(['name' => 'laravel']);
+        UserModel::factory()->create();
+
+        $result = UnionPaginator::forModels([TagModel::class, OtherTagModel::class, UserModel::class])->paginate();
+
+        $this->assertEquals(3, $result->total());
+    }
+
+    public function test_cursor_continues_past_a_page_whose_models_were_all_skipped()
+    {
+        UserModel::factory()->count(4)->create();
+
+        $paginator = UnionPaginator::forModels([UserModel::class])
+            ->fetchModelsUsing(UserModel::class, fn (array $ids) => UserModel::findMany($ids)->whereNotIn('id', [1, 2]))
+            ->orderBy('id');
+
+        $first = $paginator->cursorPaginate(2);
+
+        $this->assertCount(0, $first->items());
+        $this->assertNotNull($first->nextCursor());
+
+        $second = $paginator->cursorPaginate(2, ['*'], 'cursor', $first->nextCursor());
+
+        $this->assertEquals([3, 4], array_map(fn ($user) => $user->id, $second->items()));
+    }
+
+    public function test_cursor_works_with_transformed_items_in_both_directions()
+    {
+        PostModel::factory()->count(3)->create();
+
+        $paginator = UnionPaginator::forModels([UserModel::class, PostModel::class])
+            ->transformResultsFor(UserModel::class, fn ($user) => 'user '.$user->id)
+            ->transformResultsFor(PostModel::class, fn ($post) => 'post '.$post->id)
+            ->orderBy('id');
+
+        $first = $paginator->cursorPaginate(4);
+        $second = $paginator->cursorPaginate(4, ['*'], 'cursor', $first->nextCursor());
+        $back = $paginator->cursorPaginate(4, ['*'], 'cursor', $second->previousCursor());
+
+        $this->assertEquals(['post 1', 'user 1', 'post 2', 'user 2'], $first->items());
+        $this->assertEquals(['post 3', 'user 3'], $second->items());
+        $this->assertEquals($first->items(), $back->items());
+    }
+
+    public function test_custom_columns_are_selected_in_order_with_type_added_last()
+    {
+        $post = PostModel::factory()->create(['title' => 'Hello']);
+        CommentModel::factory()->for($post, 'post')->for($post->user, 'user')->create(['content' => 'Hi']);
+
+        $rows = UnionPaginator::forModels([PostModel::class, CommentModel::class])
+            ->setSelectedColumns(PostModel::class, ['post_models.id as id', 'post_models.title as label'])
+            ->setSelectedColumns(CommentModel::class, ['comment_models.id as id', 'comment_models.content as label'])
+            ->preventModelRetrieval()
+            ->orderBy('type')
+            ->paginate()
+            ->items();
+
+        $this->assertEquals(['label' => 'Hi', 'type' => CommentModel::class], ['label' => $rows[0]->label, 'type' => $rows[0]->type]);
+        $this->assertEquals(['label' => 'Hello', 'type' => PostModel::class], ['label' => $rows[1]->label, 'type' => $rows[1]->type]);
+
+        $models = UnionPaginator::forModels([PostModel::class, CommentModel::class])
+            ->setSelectedColumns(PostModel::class, ['post_models.id as id', 'post_models.title as label'])
+            ->setSelectedColumns(CommentModel::class, ['comment_models.id as id', 'comment_models.content as label'])
+            ->orderBy('type')
+            ->paginate()
+            ->items();
+
+        $this->assertInstanceOf(CommentModel::class, $models[0]);
+        $this->assertTrue($models[1]->is($post));
+    }
+
+    public function test_cursor_back_to_the_first_page_has_no_previous_page()
+    {
+        UserModel::factory()->count(6)->create();
+
+        $paginator = UnionPaginator::forModels([UserModel::class])->orderBy('id');
+
+        $first = $paginator->cursorPaginate(2);
+        $second = $paginator->cursorPaginate(2, ['*'], 'cursor', $first->nextCursor());
+        $back = $paginator->cursorPaginate(2, ['*'], 'cursor', $second->previousCursor());
+
+        $this->assertEquals([1, 2], array_map(fn ($user) => $user->id, $back->items()));
+        $this->assertTrue($back->onFirstPage());
+        $this->assertNull($back->previousCursor());
+        $this->assertNotNull($back->nextCursor());
+    }
+
+    public function test_cursor_rejects_raw_random_and_expression_orders()
+    {
+        $paginators = [
+            UnionPaginator::forModels([UserModel::class])->orderByRaw('id desc'),
+            UnionPaginator::forModels([UserModel::class])->inRandomOrder(),
+            UnionPaginator::forModels([UserModel::class])->orderBy(DB::raw('id'), 'desc'),
+        ];
+
+        foreach ($paginators as $paginator) {
+            try {
+                $paginator->cursorPaginate();
+                $this->fail('Expected InvalidArgumentException.');
+            } catch (InvalidArgumentException) {
+                $this->addToAssertionCount(1);
+            }
+        }
+    }
+
+    public function test_raw_row_transformers_cannot_change_the_cursor()
+    {
+        UserModel::factory()->count(4)->create();
+
+        $paginator = UnionPaginator::forModels([UserModel::class])
+            ->preventModelRetrieval()
+            ->transformResultsFor(UserModel::class, function ($row) {
+                $row->id += 100;
+
+                return $row;
+            })
+            ->orderBy('id');
+
+        $first = $paginator->cursorPaginate(2);
+        $second = $paginator->cursorPaginate(2, ['*'], 'cursor', $first->nextCursor());
+
+        $this->assertEquals([103, 104], array_map(fn ($row) => $row->id, $second->items()));
+    }
+}
+
+class OtherTagModel extends TagModel
+{
+    public $table = 'tag_models';
 }
 
 class PinnedUserModel extends UserModel
