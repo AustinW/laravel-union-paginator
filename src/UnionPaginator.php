@@ -4,386 +4,108 @@ namespace AustinW\UnionPaginator;
 
 use BadMethodCallException;
 use Closure;
-use Illuminate\Database\Eloquent\Model;
+use Illuminate\Contracts\Database\Query\Expression;
+use Illuminate\Contracts\Pagination\CursorPaginator;
+use Illuminate\Contracts\Pagination\LengthAwarePaginator;
+use Illuminate\Contracts\Pagination\Paginator;
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Query\Builder;
+use Illuminate\Pagination\AbstractPaginator;
+use Illuminate\Pagination\Cursor;
+use Illuminate\Pagination\CursorPaginator as BaseCursorPaginator;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Traits\ForwardsCalls;
-use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Support\Str;
+use Illuminate\Support\Traits\Conditionable;
 use InvalidArgumentException;
+use UnexpectedValueException;
+use stdClass;
 
 /**
- * A paginator that supports union queries across multiple model types.
+ * Paginates a UNION of several Eloquent models as one result set.
  */
 class UnionPaginator
 {
-    use ForwardsCalls;
+    use Conditionable;
 
     /**
-     * @var array List of model types to be paginated.
+     * Query builder method prefixes that may be called on the paginator. They apply to the whole union.
+     */
+    protected const FORWARDED_PREFIXES = ['where', 'orWhere', 'orderBy', 'latest', 'oldest', 'reorder', 'inRandomOrder'];
+
+    /**
+     * Columns appended to any ordering so that rows with equal sort values keep a stable order.
+     */
+    protected const TIE_BREAKERS = ['type', 'id'];
+
+    /**
+     * @var list<class-string<Model>>
      */
     protected array $modelTypes = [];
 
     /**
-     * @var EloquentBuilder|null The union query builder instance.
+     * @var array<class-string<Model>, list<Closure>>
      */
-    public ?EloquentBuilder $unionQuery = null;
+    protected array $scopes = [];
 
     /**
-     * @var array List of scopes to be applied to the queries.
+     * @var array<class-string<Model>, Closure>
      */
-    public array $scopes = [];
+    protected array $transformers = [];
 
     /**
-     * @var array List of transformers for transforming query results.
-     */
-    public array $transformers = [];
-
-    /**
-     * @var array List of selected columns for each model type.
+     * @var array<class-string<Model>, array<mixed>>
      */
     protected array $selectedColumns = [];
 
     /**
-     * @var bool Flag to prevent model retrieval.
-     */
-    protected bool $preventModelRetrieval = false;
-
-    /**
-     * @var array Callbacks to handle model retrieval per model type.
+     * @var array<class-string<Model>, Closure>
      */
     protected array $modelRetrievalCallbacks = [];
 
     /**
-     * UnionPaginator constructor.
-     *
-     * @param array|string $modelTypes List of model types to be paginated.
-     * @throws InvalidArgumentException
+     * @var list<array{string, array<mixed>}>
      */
-    public function __construct(array|string $modelTypes = [])
-    {
-        foreach (Arr::wrap($modelTypes) as $modelType) {
-            if (!is_subclass_of($modelType, Model::class)) {
-                throw new InvalidArgumentException("$modelType is not a subclass of " . Model::class);
-            }
+    protected array $forwardedCalls = [];
 
-            $this->addModelType($modelType);
-        }
+    protected bool $preventModelRetrieval = false;
+
+    /**
+     * @param class-string<Model>|list<class-string<Model>> $modelTypes
+     */
+    final public function __construct(array|string $modelTypes = [])
+    {
+        $this->setModelTypes(array_values(Arr::wrap($modelTypes)));
     }
 
     /**
-     * Create a new instance for the given model types.
-     *
-     * @param array $modelTypes
-     * @return self
+     * @param list<class-string<Model>> $modelTypes
      */
-    public static function forModels(array $modelTypes): self
+    public static function forModels(array $modelTypes): static
     {
-        return new self($modelTypes);
+        return new static($modelTypes);
     }
 
     /**
-     * Add a model type to the paginator.
-     *
-     * @param string $modelType
-     * @return self
+     * @param class-string<Model> $modelType
      */
-    public function addModelType(string $modelType): self
+    public function addModelType(string $modelType): static
     {
-        $this->modelTypes[] = $modelType;
-
-        return $this;
-    }
-
-    /**
-     * Prevent model retrieval during pagination.
-     *
-     * @return self
-     */
-    public function preventModelRetrieval(): self
-    {
-        $this->preventModelRetrieval = true;
-
-        return $this;
-    }
-
-    /**
-     * Prepare the union query for pagination.
-     *
-     * @return self
-     * @throws BadMethodCallException
-     */
-    public function prepareUnionQuery(): self
-    {
-        $this->unionQuery = null;
-
-        if (empty($this->modelTypes)) {
-            throw new BadMethodCallException('No models have been added to the UnionPaginator.');
+        if (! is_subclass_of($modelType, Model::class)) {
+            throw new InvalidArgumentException("$modelType is not a subclass of " . Model::class);
         }
 
-        foreach ($this->modelTypes as $modelType) {
-            /** @var Model $model */
-            $model = new $modelType;
-            $columns = $this->selectedColumns[$modelType] ?? $this->defaultColumns($model);
-
-            $query = $model->newQuery()->select($columns);
-
-            if ($this->hasScope($modelType)) {
-                foreach ($this->getScopesFor($modelType) as $modelScope) {
-                    $modelScope($query);
-                }
-            }
-
-            if ($this->unionQuery) {
-                $this->unionQuery = $this->unionQuery->union($query);
-            } else {
-                $this->unionQuery = $query;
-            }
+        if (! in_array($modelType, $this->modelTypes, true)) {
+            $this->modelTypes[] = $modelType;
         }
 
         return $this;
     }
 
     /**
-     * Paginate the results of the union query.
-     *
-     * @param int $perPage
-     * @param array|string $columns
-     * @param string $pageName
-     * @param int|null $page
-     * @return LengthAwarePaginator
-     */
-    public function paginate(int $perPage = 15, array|string $columns = ['*'], string $pageName = 'page', ?int $page = null): LengthAwarePaginator
-    {
-        if (!$this->unionQuery) {
-            $this->prepareUnionQuery();
-        }
-        
-        if (is_null($page)) {
-            $page = LengthAwarePaginator::resolveCurrentPage($pageName);
-        }
-
-        $paginated = $this->executePagination($perPage, $columns, $pageName, $page);
-
-        $items = $paginated->items();
-
-        if (empty($items)) {
-            return $paginated;
-        }
-
-        $transformedItems = $this->preventModelRetrieval
-            ? $this->transformItemsWithoutModels($items)
-            : $this->transformItemsWithModels($items);
-
-        $paginated->setCollection(collect($transformedItems));
-
-        return $paginated;
-    }
-
-    /**
-     * Execute the pagination query.
-     *
-     * @param int $perPage
-     * @param array|string $columns
-     * @param string $pageName
-     * @param int|null $page
-     * @return LengthAwarePaginator
-     */
-    protected function executePagination(int $perPage, array|string $columns, string $pageName, ?int $page): LengthAwarePaginator
-    {
-        $items = $this->unionQuery->getQuery()->newQuery()
-            ->fromSub($this->unionQuery, 'subquery')
-            ->forPage($page, $perPage)
-            ->get($columns);
-
-        return new LengthAwarePaginator(
-            $items,
-            $this->unionQuery->count(),
-            $perPage,
-            $page,
-            ['path' => LengthAwarePaginator::resolveCurrentPath(), 'pageName' => $pageName]
-        );
-    }
-
-    /**
-     * Transform items without retrieving models.
-     *
-     * @param array $items
-     * @return array
-     */
-    protected function transformItemsWithoutModels(array $items): array
-    {
-        $transformedItems = [];
-
-        foreach ($items as $item) {
-            $modelType = $item->type;
-
-            $transformedItems[] = $this->applyTransformer($modelType, $item);
-        }
-
-        return $transformedItems;
-    }
-
-    /**
-     * Transform items with retrieved models.
-     *
-     * @param array $items
-     * @return array
-     */
-    protected function transformItemsWithModels(array $items): array
-    {
-        $itemsByType = collect($items)->groupBy('type');
-        $modelsByType = $this->loadModelsByType($itemsByType);
-
-        $transformedItems = [];
-
-        foreach ($items as $item) {
-            $modelType = $item->type;
-            $id = $item->id;
-
-            $loadedModel = $modelsByType[$modelType][$id] ?? null;
-
-            $transformedItems[] = $this->applyTransformer($modelType, $loadedModel);
-        }
-
-        return $transformedItems;
-    }
-
-    /**
-     * Load models by their type.
-     *
-     * @param Collection $itemsByType
-     * @return array
-     */
-    protected function loadModelsByType(Collection $itemsByType): array
-    {
-        $modelsByType = [];
-
-        foreach ($itemsByType as $modelType => $groupedItems) {
-            $ids = $groupedItems->pluck('id')->unique()->toArray();
-
-            $models = $this->retrieveModels($modelType, $ids);
-
-            $modelsByType[$modelType] = $models->keyBy(
-                $models->first()?->getKeyName() ?? 'id'
-            );
-        }
-
-        return $modelsByType;
-    }
-
-    /**
-     * Apply a transformer to an item.
-     *
-     * @param string $modelType
-     * @param mixed $item
-     * @return mixed
-     */
-    protected function applyTransformer(string $modelType, $item): mixed
-    {
-        if (isset($this->transformers[$modelType])) {
-            $callable = $this->transformers[$modelType];
-            return $callable($item);
-        }
-
-        return $item;
-    }
-
-    /**
-     * Register a transformer for a specific model type.
-     *
-     * @param string $modelType
-     * @param Closure $callable
-     * @return self
-     */
-    public function transformResultsFor(string $modelType, Closure $callable): self
-    {
-        if (!in_array($modelType, $this->modelTypes)) {
-            return $this;
-        }
-
-        $this->transformers[$modelType] = $callable;
-
-        return $this;
-    }
-
-    /**
-     * Check if a scope exists for a model type.
-     *
-     * @param string $modelType
-     * @return bool
-     */
-    public function hasScope(string $modelType): bool
-    {
-        return collect($this->scopes)->filter(fn ($scope) => $scope[0] === $modelType)->isNotEmpty();
-    }
-
-    /**
-     * Get scopes for a specific model type.
-     *
-     * @param string $modelType
-     * @return Collection
-     */
-    public function getScopesFor(string $modelType): Collection
-    {
-        return collect($this->scopes)->filter(fn ($scope) => $scope[0] === $modelType)->map(fn ($scope) => $scope[1]);
-    }
-
-    /**
-     * Apply a scope to a model type.
-     *
-     * @param string $modelType
-     * @param Closure $callable
-     * @return self
-     */
-    public function applyScope(string $modelType, Closure $callable): self
-    {
-        $this->scopes[] = [$modelType, $callable];
-
-        return $this;
-    }
-
-    /**
-     * Retrieve models for a given type using a registered callback or default logic.
-     *
-     * @param string $modelType
-     * @param array $ids
-     * @return Collection
-     */
-    protected function retrieveModels(string $modelType, array $ids): Collection
-    {
-        if (isset($this->modelRetrievalCallbacks[$modelType])) {
-            return call_user_func($this->modelRetrievalCallbacks[$modelType], $ids);
-        }
-
-        // Default retrieval logic
-        return $modelType::findMany($ids);
-    }
-
-    /**
-     * Register a custom callback for retrieving models by type.
-     *
-     * @param string $modelType
-     * @param Closure $callback
-     * @return self
-     * @throws InvalidArgumentException
-     */
-    public function fetchModelsUsing(string $modelType, Closure $callback): self
-    {
-        if (!in_array($modelType, $this->modelTypes)) {
-            throw new InvalidArgumentException("Model type {$modelType} is not registered in this paginator.");
-        }
-
-        $this->modelRetrievalCallbacks[$modelType] = $callback;
-
-        return $this;
-    }
-
-    /**
-     * Get the list of model types.
-     *
-     * @return array
+     * @return list<class-string<Model>>
      */
     public function getModelTypes(): array
     {
@@ -391,70 +113,314 @@ class UnionPaginator
     }
 
     /**
-     * Set the list of model types.
-     *
-     * @param array $modelTypes
-     * @return self
+     * @param list<class-string<Model>> $modelTypes
      */
-    public function setModelTypes(array $modelTypes): self
+    public function setModelTypes(array $modelTypes): static
     {
-        $this->modelTypes = $modelTypes;
+        $this->modelTypes = [];
+
+        foreach ($modelTypes as $modelType) {
+            $this->addModelType($modelType);
+        }
 
         return $this;
     }
 
     /**
-     * Set the selected columns for a specific model type.
+     * Constrain one model's query before it joins the union.
      *
-     * @param string $modelType
-     * @param array $columns
-     * @return self
+     * @param class-string<Model> $modelType
+     * @param Closure(EloquentBuilder<Model>): mixed $callable
      */
-    public function setSelectedColumns(string $modelType, array $columns): self
+    public function applyScope(string $modelType, Closure $callable): static
     {
+        $this->assertRegistered($modelType);
+
+        $this->scopes[$modelType][] = $callable;
+
+        return $this;
+    }
+
+    /**
+     * Columns to select for one model, in the same order for every model. Include an `id` alias; `type` is added last.
+     *
+     * @param class-string<Model> $modelType
+     * @param array<mixed> $columns
+     */
+    public function setSelectedColumns(string $modelType, array $columns): static
+    {
+        $this->assertRegistered($modelType);
+
         $this->selectedColumns[$modelType] = $columns;
 
         return $this;
     }
 
     /**
-     * Get the default columns for a model.
+     * Transform each result of one model type. Receives the model, or the raw row when model retrieval is prevented.
      *
-     * @param Model $model
-     * @return array
+     * @param class-string<Model> $modelType
+     */
+    public function transformResultsFor(string $modelType, Closure $callable): static
+    {
+        $this->assertRegistered($modelType);
+
+        $this->transformers[$modelType] = $callable;
+
+        return $this;
+    }
+
+    /**
+     * Load the models of one type with a custom query. Receives the page's keys, returns a collection of models.
+     *
+     * @param class-string<Model> $modelType
+     * @param Closure(array<int|string>): Collection<array-key, Model> $callback
+     */
+    public function fetchModelsUsing(string $modelType, Closure $callback): static
+    {
+        $this->assertRegistered($modelType);
+
+        $this->modelRetrievalCallbacks[$modelType] = $callback;
+
+        return $this;
+    }
+
+    /**
+     * Return raw database rows instead of loading models.
+     */
+    public function preventModelRetrieval(): static
+    {
+        $this->preventModelRetrieval = true;
+
+        return $this;
+    }
+
+    /**
+     * @param array<string>|string $columns
+     * @return \Illuminate\Pagination\LengthAwarePaginator<int, mixed>
+     */
+    public function paginate(int $perPage = 15, array|string $columns = ['*'], string $pageName = 'page', ?int $page = null): LengthAwarePaginator
+    {
+        $paginator = $this->toBase()->paginate($perPage, $columns, $pageName, $page);
+
+        return $paginator->setCollection($this->hydrate($paginator->getCollection()));
+    }
+
+    /**
+     * Paginate without counting the total, which saves a COUNT over the whole union.
+     *
+     * @param array<string>|string $columns
+     * @return \Illuminate\Pagination\AbstractPaginator<int, mixed>&Paginator<int, mixed>
+     */
+    public function simplePaginate(int $perPage = 15, array|string $columns = ['*'], string $pageName = 'page', ?int $page = null): Paginator
+    {
+        $paginator = $this->toBase()->simplePaginate($perPage, $columns, $pageName, $page);
+
+        if (! $paginator instanceof AbstractPaginator) {
+            throw new UnexpectedValueException('The bound Paginator must extend '.AbstractPaginator::class.'.');
+        }
+
+        return $paginator->setCollection($this->hydrate($paginator->getCollection()));
+    }
+
+    /**
+     * Cursor paginate. The order must be unique and non-null: `type` and `id` are appended as tie-breakers.
+     *
+     * @param array<string>|string $columns
+     * @return UnionCursorPaginator
+     */
+    public function cursorPaginate(int $perPage = 15, array|string $columns = ['*'], string $cursorName = 'cursor', Cursor|string|null $cursor = null): CursorPaginator
+    {
+        $query = $this->toBase();
+
+        if (empty($query->orders)) {
+            $this->addTieBreakers($query);
+        }
+
+        $paginator = $query->cursorPaginate($perPage, $columns, $cursorName, $cursor);
+
+        if (! $paginator instanceof BaseCursorPaginator) {
+            throw new UnexpectedValueException('The bound CursorPaginator must extend '.BaseCursorPaginator::class.'.');
+        }
+
+        return UnionCursorPaginator::fromRows($paginator, $this->hydrate($paginator->getCollection()));
+    }
+
+    /**
+     * The query over the union, with the forwarded where and order calls applied.
+     */
+    public function toBase(): Builder
+    {
+        if (empty($this->modelTypes)) {
+            throw new BadMethodCallException('No models have been added to the UnionPaginator.');
+        }
+
+        $models = array_map(fn (string $modelType) => new $modelType, $this->modelTypes);
+        $connection = $models[0]->getConnection()->getName();
+        $union = $this->queryFor($models[0]);
+
+        foreach (array_slice($models, 1) as $model) {
+            // The union runs as one statement, so every model must live on the same connection.
+            if ($model->getConnection()->getName() !== $connection) {
+                throw new InvalidArgumentException(sprintf(
+                    '%s uses connection [%s], but the union runs on [%s].',
+                    $model::class,
+                    $model->getConnection()->getName(),
+                    $connection
+                ));
+            }
+
+            $union->union($this->queryFor($model));
+        }
+
+        $query = $union->getQuery()->newQuery()->fromSub($union, 'union_paginator');
+
+        foreach ($this->forwardedCalls as [$method, $parameters]) {
+            $query->{$method}(...$parameters);
+        }
+
+        if (! empty($query->orders)) {
+            $this->addTieBreakers($query);
+        }
+
+        return $query;
+    }
+
+    /**
+     * @param array<mixed> $parameters
+     */
+    public function __call(string $method, array $parameters): static
+    {
+        if (! Str::startsWith($method, self::FORWARDED_PREFIXES) || ! method_exists(Builder::class, $method)) {
+            throw new BadMethodCallException(sprintf(
+                'Call to undefined method %s::%s(). Only query builder where and order methods are forwarded to the union. Use applyScope() for model-specific constraints.',
+                static::class,
+                $method
+            ));
+        }
+
+        $this->forwardedCalls[] = [$method, $parameters];
+
+        return $this;
+    }
+
+    protected function addTieBreakers(Builder $query): void
+    {
+        $orders = $query->orders ?? [];
+        $ordered = array_map(fn (array $order) => is_string($order['column'] ?? null) ? Str::afterLast($order['column'], '.') : null, $orders);
+        $direction = (Arr::last($orders)['direction'] ?? null) === 'desc' ? 'desc' : 'asc';
+
+        foreach (self::TIE_BREAKERS as $column) {
+            if (! in_array($column, $ordered, true)) {
+                $query->orderBy($column, $direction);
+            }
+        }
+    }
+
+    /**
+     * @return EloquentBuilder<Model>
+     */
+    protected function queryFor(Model $model): EloquentBuilder
+    {
+        $query = $model->newQuery();
+
+        $query->select($this->selectedColumns[$model::class] ?? $this->defaultColumns($model))
+            ->selectRaw('? as type', [$model::class]);
+
+        foreach ($this->scopes[$model::class] ?? [] as $scope) {
+            $scope($query);
+        }
+
+        return $query;
+    }
+
+    /**
+     * @return list<string|Expression>
      */
     protected function defaultColumns(Model $model): array
     {
-        $className = $model::class;
-
-        // Only MySQL/MariaDB treat backslashes in string literals as escapes.
-        if (in_array($model->getConnection()->getDriverName(), ['mysql', 'mariadb'])) {
-            $className = addslashes($className);
-        }
-
         return [
-            $model->getKeyName(),
-            'created_at',
-            'updated_at',
-            DB::raw(sprintf("'%s' as type", $className))
+            $model->getQualifiedKeyName() . ' as id',
+            $this->timestampColumn($model, $model->getCreatedAtColumn(), 'created_at'),
+            $this->timestampColumn($model, $model->getUpdatedAtColumn(), 'updated_at'),
         ];
     }
 
     /**
-     * Handle dynamic method calls into the union query.
-     *
-     * @param string $method
-     * @param array $parameters
-     * @return $this
+     * @param 'created_at'|'updated_at' $alias
      */
-    public function __call(string $method, array $parameters)
+    protected function timestampColumn(Model $model, ?string $column, string $alias): string|Expression
     {
-        if (!$this->unionQuery) {
-            $this->prepareUnionQuery();
+        if ($column) {
+            return $model->qualifyColumn($column) . " as $alias";
         }
 
-        $this->forwardCallTo($this->unionQuery, $method, $parameters);
+        // Postgres types an untyped NULL as text, which cannot be unioned with a timestamp column.
+        return $model->getConnection()->getDriverName() === 'pgsql'
+            ? DB::raw("null::timestamp as $alias")
+            : DB::raw("null as $alias");
+    }
 
-        return $this;
+    /**
+     * Turn a page of union rows into models (or transformed rows).
+     *
+     * @param Collection<array-key, mixed> $rows
+     * @return Collection<int, mixed>
+     */
+    protected function hydrate(Collection $rows): Collection
+    {
+        /** @var Collection<int, stdClass> $rows */
+        $items = $this->preventModelRetrieval
+            ? $rows->map(fn (stdClass $row) => $this->applyTransformer($row->type, $row))
+            : $this->loadModels($rows);
+
+        return $items->values();
+    }
+
+    /**
+     * Load each page row's model with one query per model type. Rows without a model are skipped.
+     *
+     * @param Collection<int, stdClass> $rows
+     * @return Collection<int, mixed>
+     */
+    protected function loadModels(Collection $rows): Collection
+    {
+        $models = [];
+
+        foreach ($this->modelTypes as $modelType) {
+            $ids = $rows->where('type', $modelType)->pluck('id')->unique()->values()->all();
+
+            if (empty($ids)) {
+                continue;
+            }
+
+            $loaded = isset($this->modelRetrievalCallbacks[$modelType])
+                ? $this->modelRetrievalCallbacks[$modelType]($ids)
+                : $modelType::findMany($ids);
+
+            if (! is_iterable($loaded)) {
+                throw new UnexpectedValueException("The fetchModelsUsing callback for $modelType must return a collection of models.");
+            }
+
+            foreach ($loaded as $model) {
+                $models[$modelType][$model->getKey()] = $model;
+            }
+        }
+
+        return $rows
+            ->filter(fn (stdClass $row) => isset($models[$row->type][$row->id]))
+            ->map(fn (stdClass $row) => $this->applyTransformer($row->type, $models[$row->type][$row->id]));
+    }
+
+    protected function applyTransformer(string $modelType, mixed $item): mixed
+    {
+        return isset($this->transformers[$modelType]) ? $this->transformers[$modelType]($item) : $item;
+    }
+
+    protected function assertRegistered(string $modelType): void
+    {
+        if (! in_array($modelType, $this->modelTypes, true)) {
+            throw new InvalidArgumentException("Model type {$modelType} is not registered in this paginator.");
+        }
     }
 }
