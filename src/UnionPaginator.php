@@ -431,11 +431,18 @@ class UnionPaginator
      */
     protected function defaultColumns(Model $model): array
     {
+        $className = $model::class;
+
+        // Only MySQL/MariaDB treat backslashes in string literals as escapes.
+        if (in_array($model->getConnection()->getDriverName(), ['mysql', 'mariadb'])) {
+            $className = addslashes($className);
+        }
+
         return [
             $model->getKeyName(),
             'created_at',
             'updated_at',
-            DB::raw($model->getConnection()->getPdo()->quote($model::class) . ' as type')
+            DB::raw(sprintf("'%s' as type", $className))
         ];
     }
 
